@@ -1,0 +1,530 @@
+<!-- app/static/index.html -->
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Ivie Chat - FastAPI Proxy</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Inter:opsz,wght@14..32,400;14..32,500;14..32,600&display=swap" rel="stylesheet">
+  <style>
+    * {
+      margin: 0;
+      padding: 0;
+      box-sizing: border-box;
+    }
+
+    body {
+      font-family: 'Inter', -apple-system, system-ui, sans-serif;
+      background: linear-gradient(145deg, #f7f9fc 0%, #e9eef4 100%);
+      min-height: 100vh;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      padding: 1.5rem;
+    }
+
+    .chat-container {
+      max-width: 720px;
+      width: 100%;
+      background: rgba(255, 255, 255, 0.7);
+      backdrop-filter: blur(12px);
+      -webkit-backdrop-filter: blur(12px);
+      border-radius: 2.5rem;
+      box-shadow: 0 25px 50px -12px rgba(0, 0, 0, 0.25);
+      padding: 1.75rem 1.75rem 1.5rem;
+      border: 1px solid rgba(255, 255, 255, 0.5);
+      transition: all 0.2s ease;
+    }
+
+    h1 {
+      font-size: 1.6rem;
+      font-weight: 600;
+      letter-spacing: -0.02em;
+      display: flex;
+      align-items: center;
+      gap: 0.5rem;
+      color: #1e293b;
+      padding-bottom: 0.5rem;
+      border-bottom: 2px solid rgba(0, 0, 0, 0.05);
+      margin-bottom: 1.25rem;
+      flex-wrap: wrap;
+    }
+
+    h1 small {
+      font-size: 0.7rem;
+      font-weight: 400;
+      color: #64748b;
+      margin-left: auto;
+      background: rgba(100, 116, 139, 0.12);
+      padding: 0.25rem 0.8rem;
+      border-radius: 40px;
+      letter-spacing: 0.01em;
+    }
+
+    .model-badge {
+      background: #1e293b;
+      color: white;
+      padding: 0.2rem 0.9rem;
+      border-radius: 40px;
+      font-size: 0.7rem;
+      font-weight: 500;
+      letter-spacing: 0.02em;
+      background: #2d3b52;
+    }
+
+    .chat-window {
+      background: rgba(255, 255, 255, 0.5);
+      backdrop-filter: blur(4px);
+      -webkit-backdrop-filter: blur(4px);
+      border-radius: 1.8rem;
+      padding: 1.2rem 1.2rem 0.8rem;
+      margin-bottom: 1.25rem;
+      border: 1px solid rgba(255, 255, 255, 0.7);
+      box-shadow: inset 0 2px 4px rgba(0,0,0,0.02);
+      max-height: 420px;
+      overflow-y: auto;
+      scroll-behavior: smooth;
+    }
+
+    .chat-window::-webkit-scrollbar {
+      width: 4px;
+    }
+
+    .chat-window::-webkit-scrollbar-track {
+      background: transparent;
+    }
+
+    .chat-window::-webkit-scrollbar-thumb {
+      background: #b9c7da;
+      border-radius: 20px;
+    }
+
+    .message {
+      display: flex;
+      flex-direction: column;
+      margin-bottom: 1rem;
+      animation: fadeUp 0.3s ease-out;
+    }
+
+    .message:last-child {
+      margin-bottom: 0.2rem;
+    }
+
+    .message.user {
+      align-items: flex-end;
+    }
+
+    .message.bot {
+      align-items: flex-start;
+    }
+
+    .bubble {
+      max-width: 85%;
+      padding: 0.7rem 1.2rem;
+      border-radius: 1.8rem;
+      font-size: 0.95rem;
+      line-height: 1.5;
+      word-break: break-word;
+      background: white;
+      box-shadow: 0 2px 6px rgba(0,0,0,0.04);
+      border: 1px solid rgba(255,255,255,0.7);
+      color: #0f172a;
+    }
+
+    .user .bubble {
+      background: #1e293b;
+      color: white;
+      border-bottom-right-radius: 0.4rem;
+      border: 1px solid #2d3b52;
+    }
+
+    .bot .bubble {
+      background: white;
+      border-bottom-left-radius: 0.4rem;
+    }
+
+    .message .time {
+      font-size: 0.6rem;
+      color: #64748b;
+      margin: 0.3rem 0.6rem 0.1rem;
+      opacity: 0.7;
+      letter-spacing: 0.02em;
+    }
+
+    .user .time {
+      align-self: flex-end;
+    }
+
+    .bot .time {
+      align-self: flex-start;
+    }
+
+    .input-area {
+      display: flex;
+      gap: 0.6rem;
+      align-items: center;
+      background: rgba(255,255,255,0.5);
+      backdrop-filter: blur(4px);
+      -webkit-backdrop-filter: blur(4px);
+      padding: 0.3rem 0.3rem 0.3rem 1.2rem;
+      border-radius: 4rem;
+      border: 1px solid rgba(255,255,255,0.8);
+      box-shadow: 0 4px 8px rgba(0,0,0,0.02);
+    }
+
+    .input-area input {
+      flex: 1;
+      border: none;
+      background: transparent;
+      padding: 0.8rem 0;
+      font-size: 0.95rem;
+      font-family: 'Inter', sans-serif;
+      outline: none;
+      color: #0f172a;
+      font-weight: 450;
+    }
+
+    .input-area input::placeholder {
+      color: #94a3b8;
+      font-weight: 400;
+      font-size: 0.9rem;
+    }
+
+    .input-area button {
+      background: #1e293b;
+      border: none;
+      color: white;
+      font-weight: 500;
+      padding: 0.6rem 1.5rem;
+      border-radius: 3rem;
+      font-size: 0.9rem;
+      cursor: pointer;
+      transition: all 0.15s ease;
+      display: flex;
+      align-items: center;
+      gap: 0.4rem;
+      box-shadow: 0 4px 8px rgba(0,0,0,0.08);
+      letter-spacing: 0.01em;
+      font-family: 'Inter', sans-serif;
+    }
+
+    .input-area button:hover {
+      background: #0f172a;
+      transform: scale(0.97);
+      box-shadow: 0 2px 6px rgba(0,0,0,0.12);
+    }
+
+    .input-area button:active {
+      transform: scale(0.94);
+    }
+
+    .input-area button:disabled {
+      opacity: 0.5;
+      pointer-events: none;
+      transform: none;
+    }
+
+    .status {
+      display: flex;
+      align-items: center;
+      justify-content: flex-end;
+      gap: 0.5rem;
+      margin-top: 0.6rem;
+      font-size: 0.75rem;
+      color: #64748b;
+      padding-right: 0.4rem;
+    }
+
+    .status .dot {
+      width: 8px;
+      height: 8px;
+      border-radius: 50%;
+      background: #22c55e;
+      display: inline-block;
+      transition: background 0.2s;
+    }
+
+    .status .dot.loading {
+      background: #eab308;
+      animation: pulse 1.2s infinite;
+    }
+
+    .status .dot.error {
+      background: #ef4444;
+    }
+
+    @keyframes pulse {
+      0% { opacity: 0.4; transform: scale(0.9); }
+      50% { opacity: 1; transform: scale(1.2); }
+      100% { opacity: 0.4; transform: scale(0.9); }
+    }
+
+    @keyframes fadeUp {
+      0% { opacity: 0; transform: translateY(8px); }
+      100% { opacity: 1; transform: translateY(0); }
+    }
+
+    .footer-note {
+      font-size: 0.65rem;
+      text-align: center;
+      color: #94a3b8;
+      margin-top: 0.7rem;
+      letter-spacing: 0.02em;
+      border-top: 1px solid rgba(0,0,0,0.03);
+      padding-top: 0.7rem;
+    }
+
+    .footer-note code {
+      background: rgba(0,0,0,0.04);
+      padding: 0.1rem 0.5rem;
+      border-radius: 20px;
+      font-size: 0.6rem;
+    }
+
+    .typing-indicator {
+      display: flex;
+      align-items: center;
+      gap: 4px;
+      padding: 0.5rem 1rem;
+    }
+
+    .typing-indicator span {
+      width: 8px;
+      height: 8px;
+      background: #94a3b8;
+      border-radius: 50%;
+      animation: typingBounce 1.4s infinite;
+    }
+
+    .typing-indicator span:nth-child(2) {
+      animation-delay: 0.2s;
+    }
+    .typing-indicator span:nth-child(3) {
+      animation-delay: 0.4s;
+    }
+
+    @keyframes typingBounce {
+      0%, 60%, 100% { transform: translateY(0); }
+      30% { transform: translateY(-6px); }
+    }
+
+    @media (max-width: 500px) {
+      .chat-container {
+        padding: 1.2rem;
+      }
+      .input-area {
+        padding-left: 0.8rem;
+      }
+      .input-area button {
+        padding: 0.5rem 1.2rem;
+        font-size: 0.8rem;
+      }
+      .bubble {
+        font-size: 0.9rem;
+      }
+    }
+  </style>
+</head>
+<body>
+  <div class="chat-container">
+    <h1>
+      <span>🧠 Ivie Chat</span>
+      <span class="model-badge">GPT-IU</span>
+      <small>Proxy → HuggingFace Spaces</small>
+    </h1>
+
+    <div class="chat-window" id="chatWindow">
+      <div class="message bot">
+        <div class="bubble">👋 Hello! I'm Ivie, your AI assistant powered by the IvieAI engine on HuggingFace Spaces. How can I help you today?</div>
+        <span class="time">just now</span>
+      </div>
+    </div>
+
+    <div class="input-area">
+      <input type="text" id="userInput" placeholder="Type a message..." autocomplete="off" />
+      <button id="sendBtn">Send</button>
+    </div>
+
+    <div style="display: flex; gap: 0.5rem; align-items: center; margin-top: 0.5rem; font-size: 0.7rem; color: #64748b; flex-wrap: wrap;">
+      <span>🎯 Powered by HuggingFace Spaces</span>
+      <span style="display: inline-block; width: 6px; height: 6px; border-radius: 50%; background: #22c55e;"></span>
+      <span>Adaptive response length · Factual mode</span>
+    </div>
+
+    <div class="status">
+      <span class="dot" id="statusDot"></span>
+      <span id="statusText">ready</span>
+    </div>
+    <div class="footer-note">
+      <span>⚡ FastAPI proxy → </span><code>GeorgeUwaifo-IvieAI.hf.space</code>
+    </div>
+  </div>
+
+  <script>
+    // Use relative path for the proxy (this will work on Render)
+    const CHAT_ENDPOINT = '/chat';
+    const chatWindow = document.getElementById('chatWindow');
+    const userInput = document.getElementById('userInput');
+    const sendBtn = document.getElementById('sendBtn');
+    const statusDot = document.getElementById('statusDot');
+    const statusText = document.getElementById('statusText');
+
+    let isGenerating = false;
+    let sessionId = null;
+
+    function addMessage(text, sender = 'bot') {
+      const messageDiv = document.createElement('div');
+      messageDiv.className = `message ${sender}`;
+
+      const bubble = document.createElement('div');
+      bubble.className = 'bubble';
+      bubble.textContent = text;
+
+      const time = document.createElement('span');
+      time.className = 'time';
+      const now = new Date();
+      time.textContent = now.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
+
+      messageDiv.appendChild(bubble);
+      messageDiv.appendChild(time);
+      chatWindow.appendChild(messageDiv);
+      chatWindow.scrollTop = chatWindow.scrollHeight;
+    }
+
+    function addTypingIndicator() {
+      const messageDiv = document.createElement('div');
+      messageDiv.className = 'message bot';
+      messageDiv.id = 'typingIndicator';
+
+      const bubble = document.createElement('div');
+      bubble.className = 'bubble typing-indicator';
+      
+      const dot1 = document.createElement('span');
+      const dot2 = document.createElement('span');
+      const dot3 = document.createElement('span');
+      
+      bubble.appendChild(dot1);
+      bubble.appendChild(dot2);
+      bubble.appendChild(dot3);
+      messageDiv.appendChild(bubble);
+      
+      chatWindow.appendChild(messageDiv);
+      chatWindow.scrollTop = chatWindow.scrollHeight;
+    }
+
+    function removeTypingIndicator() {
+      const indicator = document.getElementById('typingIndicator');
+      if (indicator) {
+        indicator.remove();
+      }
+    }
+
+    function setStatus(label, isLoading = false, isError = false) {
+      statusText.textContent = label;
+      statusDot.classList.remove('loading', 'error');
+      if (isError) {
+        statusDot.classList.add('error');
+      } else if (isLoading) {
+        statusDot.classList.add('loading');
+      }
+    }
+
+    async function generateResponse(prompt) {
+      if (isGenerating) return;
+
+      isGenerating = true;
+      userInput.disabled = true;
+      sendBtn.disabled = true;
+      setStatus('generating...', true);
+      
+      addTypingIndicator();
+
+      try {
+        const response = await fetch(CHAT_ENDPOINT, {
+          method: 'POST',
+          headers: {
+            'Content-Type': 'application/json',
+          },
+          body: JSON.stringify({
+            message: prompt,
+            session_id: sessionId
+          }),
+        });
+
+        removeTypingIndicator();
+
+        if (!response.ok) {
+          let errorMsg = `Server Error: ${response.status}`;
+          try {
+            const errorData = await response.json();
+            errorMsg = errorData.detail || errorMsg;
+          } catch (e) {
+            errorMsg = `Server Error ${response.status}: ${response.statusText}`;
+          }
+          throw new Error(errorMsg);
+        }
+
+        const result = await response.json();
+        console.log('Server Response:', result);
+
+        if (result.success) {
+          if (result.session_id) {
+            sessionId = result.session_id;
+          }
+
+          if (result.model_loading) {
+            addMessage('🔄 ' + result.response, 'bot');
+            setStatus('model warming up', true);
+          } else {
+            addMessage(result.response, 'bot');
+            setStatus('ready', false);
+          }
+        } else {
+          throw new Error(result.detail || 'Unknown error occurred');
+        }
+
+      } catch (err) {
+        console.error('Generation error:', err);
+        removeTypingIndicator();
+        
+        let errorMsg = err.message || 'Something went wrong';
+        if (errorMsg.includes('Failed to fetch')) {
+          errorMsg = 'Cannot connect to the server. Make sure the application is running.';
+        }
+        
+        addMessage(`⚠️ ${errorMsg}`, 'bot');
+        setStatus('error', false, true);
+      } finally {
+        isGenerating = false;
+        userInput.disabled = false;
+        sendBtn.disabled = false;
+        if (!isGenerating && !document.querySelector('.status .dot.error')) {
+          setStatus('ready', false);
+        }
+        userInput.focus();
+      }
+    }
+
+    function handleSend() {
+      const text = userInput.value.trim();
+      if (!text || isGenerating) return;
+
+      addMessage(text, 'user');
+      userInput.value = '';
+      generateResponse(text);
+    }
+
+    sendBtn.addEventListener('click', handleSend);
+    userInput.addEventListener('keydown', (e) => {
+      if (e.key === 'Enter' && !e.shiftKey) {
+        e.preventDefault();
+        handleSend();
+      }
+    });
+
+    userInput.focus();
+  </script>
+</body>
+</html>
