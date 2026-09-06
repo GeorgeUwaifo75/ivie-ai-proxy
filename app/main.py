@@ -21,8 +21,8 @@ logging.basicConfig(
 logger = logging.getLogger(__name__)
 
 # ── Daily chat request limits ──────────────────────────────────────
-REGULAR_DAILY_LIMIT = 5
-PREMIUM_DAILY_LIMIT = 15
+REGULAR_DAILY_LIMIT = 10
+PREMIUM_DAILY_LIMIT = 25
 
 # Optional persistent usage store (JSONBin) — matches the JSONBin-based
 # storage already used elsewhere in this project. If these env vars are

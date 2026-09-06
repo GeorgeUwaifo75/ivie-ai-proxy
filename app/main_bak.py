@@ -7,6 +7,7 @@ from pydantic import BaseModel
 from typing import Optional, List, Dict
 import logging
 import sys
+import os
 import httpx
 import asyncio
 from datetime import datetime
@@ -19,10 +20,25 @@ logging.basicConfig(
 )
 logger = logging.getLogger(__name__)
 
+# ── Daily chat request limits ──────────────────────────────────────
+REGULAR_DAILY_LIMIT = 5
+PREMIUM_DAILY_LIMIT = 15
+
+# Optional persistent usage store (JSONBin) — matches the JSONBin-based
+# storage already used elsewhere in this project. If these env vars are
+# not set on Render, usage falls back to an in-memory counter that resets
+# whenever this service restarts or spins down after inactivity — fine
+# for testing, but set these for the daily limit to actually hold up.
+JSONBIN_API_KEY = os.getenv("JSONBIN_API_KEY")
+JSONBIN_USAGE_BIN_ID = os.getenv("JSONBIN_USAGE_BIN_ID")
+JSONBIN_BASE_URL = "https://api.jsonbin.io/v3/b"
+
 # Pydantic models
 class ChatRequest(BaseModel):
     message: str
     session_id: Optional[str] = None
+    user_id: Optional[str] = None
+    is_premium: Optional[bool] = False
 
 class ChatResponse(BaseModel):
     success: bool
@@ -31,6 +47,9 @@ class ChatResponse(BaseModel):
     session_id: Optional[str] = None
     interaction_count: Optional[int] = None
     model_loading: Optional[bool] = False
+    limit_reached: Optional[bool] = False
+    remaining_today: Optional[int] = None
+    daily_limit: Optional[int] = None
 
 class SessionResponse(BaseModel):
     session_id: str
@@ -105,6 +124,87 @@ class SessionManager:
             del self.sessions[session_id]
             return True
         return False
+
+
+# ── Daily usage tracking ────────────────────────────────────────────
+# Keyed by user_id -> {"date": "YYYY-MM-DD", "count": N}. Persisted to
+# JSONBin when configured; otherwise kept in memory for this process only.
+_usage_cache: Dict[str, Dict] = {}
+_usage_lock = asyncio.Lock()
+
+
+def _today_str() -> str:
+    return datetime.now().strftime("%Y-%m-%d")
+
+
+async def _load_usage_data() -> Dict:
+    global _usage_cache
+    if JSONBIN_API_KEY and JSONBIN_USAGE_BIN_ID:
+        try:
+            resp = await client.get(
+                f"{JSONBIN_BASE_URL}/{JSONBIN_USAGE_BIN_ID}/latest",
+                headers={"X-Master-Key": JSONBIN_API_KEY},
+                timeout=8.0
+            )
+            if resp.status_code == 200:
+                _usage_cache = resp.json().get("record", {}) or {}
+        except Exception as e:
+            logger.warning(f"JSONBin usage load failed, using in-memory cache: {e}")
+    return _usage_cache
+
+
+async def _save_usage_data(data: Dict):
+    global _usage_cache
+    _usage_cache = data
+    if JSONBIN_API_KEY and JSONBIN_USAGE_BIN_ID:
+        try:
+            await client.put(
+                f"{JSONBIN_BASE_URL}/{JSONBIN_USAGE_BIN_ID}",
+                headers={"X-Master-Key": JSONBIN_API_KEY, "Content-Type": "application/json"},
+                json=data,
+                timeout=8.0
+            )
+        except Exception as e:
+            logger.warning(f"JSONBin usage save failed: {e}")
+
+
+async def check_and_increment_usage(user_id: str, is_premium: bool) -> Dict:
+    """
+    Checks today's usage for user_id against their daily limit. If they're
+    still under the limit, increments the count and returns allowed=True.
+    If they've already hit the limit, returns allowed=False WITHOUT
+    incrementing further.
+    """
+    async with _usage_lock:
+        data = await _load_usage_data()
+        today = _today_str()
+        limit = PREMIUM_DAILY_LIMIT if is_premium else REGULAR_DAILY_LIMIT
+
+        record = data.get(user_id, {})
+        if record.get("date") != today:
+            record = {"date": today, "count": 0}
+
+        used = record["count"]
+        if used >= limit:
+            data[user_id] = record
+            await _save_usage_data(data)
+            return {"allowed": False, "remaining": 0, "limit": limit, "used": used}
+
+        record["count"] = used + 1
+        data[user_id] = record
+        await _save_usage_data(data)
+        return {"allowed": True, "remaining": limit - record["count"], "limit": limit, "used": record["count"]}
+
+
+async def get_usage_status(user_id: str, is_premium: bool) -> Dict:
+    """Read-only lookup of today's usage, without incrementing anything."""
+    async with _usage_lock:
+        data = await _load_usage_data()
+        today = _today_str()
+        limit = PREMIUM_DAILY_LIMIT if is_premium else REGULAR_DAILY_LIMIT
+        record = data.get(user_id, {})
+        used = record.get("count", 0) if record.get("date") == today else 0
+        return {"used": used, "limit": limit, "remaining": max(0, limit - used)}
 
 # Create FastAPI app
 app = FastAPI(
@@ -181,6 +281,27 @@ async def chat(request: ChatRequest):
     try:
         if not request.message.strip():
             raise HTTPException(status_code=400, detail="Empty message")
+
+        # ── Enforce the daily request limit before doing anything else,
+        # so a user who's already used up their quota never costs us a
+        # call to the Spaces backend.
+        user_id = request.user_id or "anonymous"
+        is_premium = bool(request.is_premium)
+        usage = await check_and_increment_usage(user_id, is_premium)
+
+        if not usage["allowed"]:
+            return ChatResponse(
+                success=True,
+                response=(
+                    f"You've reached your daily limit of {usage['limit']} chat "
+                    f"requests. Please come back tomorrow"
+                    + ("." if is_premium else ", or upgrade to Premium for more chats per day.")
+                ),
+                session_id=request.session_id,
+                limit_reached=True,
+                remaining_today=0,
+                daily_limit=usage["limit"]
+            )
         
         # Check if Spaces is healthy
         try:
@@ -189,13 +310,17 @@ async def chat(request: ChatRequest):
                 return ChatResponse(
                     success=True,
                     response="The AI model is currently unavailable. Please try again later.",
-                    model_loading=True
+                    model_loading=True,
+                    remaining_today=usage["remaining"],
+                    daily_limit=usage["limit"]
                 )
         except Exception:
             return ChatResponse(
                 success=True,
                 response="Cannot connect to the AI service. Please check your connection and try again.",
-                model_loading=True
+                model_loading=True,
+                remaining_today=usage["remaining"],
+                daily_limit=usage["limit"]
             )
         
         # Get or create session
@@ -216,7 +341,9 @@ async def chat(request: ChatRequest):
                 success=True,
                 response="The AI service encountered an issue. Please try again.",
                 session_id=session.session_id,
-                model_loading=True
+                model_loading=True,
+                remaining_today=usage["remaining"],
+                daily_limit=usage["limit"]
             )
         
         result = response.json()
@@ -236,7 +363,9 @@ async def chat(request: ChatRequest):
                 sentences=sentences,
                 session_id=session.session_id,
                 interaction_count=len(session.history),
-                model_loading=result.get("model_loading", False)
+                model_loading=result.get("model_loading", False),
+                remaining_today=usage["remaining"],
+                daily_limit=usage["limit"]
             )
         else:
             error_msg = result.get("error", "Unknown error from AI service")
@@ -244,7 +373,9 @@ async def chat(request: ChatRequest):
                 success=True,
                 response=f"Error from AI service: {error_msg}",
                 session_id=session.session_id,
-                model_loading=True
+                model_loading=True,
+                remaining_today=usage["remaining"],
+                daily_limit=usage["limit"]
             )
     
     except httpx.TimeoutException:
@@ -257,6 +388,13 @@ async def chat(request: ChatRequest):
     except Exception as e:
         logger.error(f"Chat error: {e}")
         raise HTTPException(status_code=500, detail=str(e))
+
+
+@app.get("/usage/{user_id}")
+async def usage_status(user_id: str, is_premium: bool = False):
+    """Look up today's remaining chat quota for a user without using one up."""
+    status = await get_usage_status(user_id, is_premium)
+    return JSONResponse(content=status)
 
 @app.get("/sessions")
 async def list_sessions():
