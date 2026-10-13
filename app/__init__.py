@@ -1,1 +1,1 @@
-#__init__
+"""Ivie AI application package."""
