@@ -17,7 +17,7 @@ services:
       - key: LLM_PROVIDER
         value: huggingface
       - key: HF_SPACE_URL
-        value: https://GeorgeUwaifo-IvieAI.hf.space
+        value: https://georgeuwaifo-ivieai.hf.space
       - key: HF_TIMEOUT
         value: "120"
       - key: ALLOWED_ORIGINS
