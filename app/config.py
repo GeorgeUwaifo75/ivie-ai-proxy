@@ -33,8 +33,8 @@ class Settings:
 
         # --- HuggingFace Space (IvieAI backend) ---
         self.hf_space_url: str = os.getenv(
-            "HF_SPACE_URL", "https://GeorgeUwaifo-IvieAI.hf.space"
-        )
+            "HF_SPACE_URL", "https://georgeuwaifo-ivieai.hf.space"
+        ).strip().rstrip("/").lower()
         self.hf_token: str | None = os.getenv("HF_TOKEN") or None
         self.hf_timeout: float = float(os.getenv("HF_TIMEOUT", "120"))
 
