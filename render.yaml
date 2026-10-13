@@ -1,27 +1,16 @@
-services:
-  - type: web
-    name: ivie-ai
-    runtime: python
-    plan: free
-    region: oregon          # or: frankfurt, singapore, ohio, virginia
-    branch: main
-    buildCommand: pip install --upgrade pip && pip install -r requirements.txt
-    startCommand: uvicorn app.main:app --host 0.0.0.0 --port $PORT --workers 1
-    healthCheckPath: /health
-    autoDeploy: true
-    envVars:
-      - key: PYTHON_VERSION
-        value: 3.11.9
-      - key: APP_NAME
-        value: Ivie AI
-      - key: LLM_PROVIDER
-        value: echo             # change to "openai" once you add a key
-      - key: ALLOWED_ORIGINS
-        value: "*"
-      - key: MAX_HISTORY_TURNS
-        value: "8"
-      # Uncomment & set in Render dashboard → Environment (mark as secret):
-      # - key: OPENAI_API_KEY
-      #   sync: false
-      # - key: OPENAI_MODEL
-      #   value: gpt-4o-mini
+envVars:
+  - key: PYTHON_VERSION
+    value: 3.11.9
+  - key: APP_NAME
+    value: Ivie AI
+  - key: LLM_PROVIDER
+    value: huggingface              # ← NEW default
+  - key: HF_SPACE_URL
+    value: https://GeorgeUwaifo-IvieAI.hf.space
+  - key: HF_TIMEOUT
+    value: "120"
+  - key: ALLOWED_ORIGINS
+    value: "*"
+  # Mark as secret in the Render dashboard:
+  - key: HF_TOKEN
+    sync: false

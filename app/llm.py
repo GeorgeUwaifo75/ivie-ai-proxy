@@ -86,19 +86,38 @@ async def _openai_reply(session_id: str, message: str) -> str:
 
 
 # --- Public API -------------------------------------------------------------
+# --- HuggingFace provider ---------------------------------------------------
+async def _hf_reply(session_id: str, message: str) -> str:
+    """Forward to the IvieAI Space and return its reply."""
+    from .hf_client import HuggingFaceClient  # local import → optional dependency
+
+    client = HuggingFaceClient(
+        base_url=settings.hf_space_url,
+        token=settings.hf_token,
+        timeout=settings.hf_timeout,
+    )
+    # Send prior turns so IvieAI keeps context
+    history = get_history(session_id)
+    return await client.chat(message, history)
+
+
+# --- Public API -------------------------------------------------------------
 async def generate_reply(session_id: str, message: str) -> tuple[str, str]:
     """Return (reply_text, provider_name_used)."""
     provider = settings.llm_provider
 
     try:
-        if provider == "openai":
+        if provider == "huggingface":
+            reply = await _hf_reply(session_id, message)
+        elif provider == "openai":
             reply = await _openai_reply(session_id, message)
         else:
             reply = _echo_reply(message)
     except Exception as exc:  # noqa: BLE001
         logger.exception("LLM provider '%s' failed: %s", provider, exc)
+        # Optional: fall back to echo so the UI always shows *something*
         reply = (
-            "I'm having trouble reaching my language model right now. "
+            f"I'm having trouble reaching my backend right now. "
             f"({type(exc).__name__}: {exc}). Please try again in a moment."
         )
 
