@@ -82,7 +82,10 @@ async def health() -> HealthResponse:
 @app.post("/chat", response_model=ChatResponse, tags=["chat"])
 async def chat(payload: ChatRequest, request: Request) -> ChatResponse:
     """Main chat endpoint used by the avatar frontend."""
-    # Build a stable session id: client header wins, then payload, then IP.
+    # Build a stable session id: payload wins, then header, then IP.
+    # The frontend sends its own session_id. The IP fallback is only for simple
+    # clients; behind Render's proxy many visitors can share one IP, so any
+    # real frontend should send a session_id (conversation memory is keyed on it).
     session_id = (
         payload.session_id
         or request.headers.get("X-Session-Id")
@@ -132,4 +135,4 @@ if __name__ == "__main__":
         host=settings.host,
         port=settings.port,
         reload=settings.debug,
-    )
+    )

@@ -640,20 +640,14 @@
   </div>
 
   <div class="settings hidden-url">
-  <input type="text" id="endpoint" value="">
-</div>
+    <input type="text" id="endpoint" value="https://GeorgeUwaifo-IvieAI.hf.space">
+  </div>
 </div>
 
 <script>
 // ============ CONFIGURATION ============
-// ============ CONFIGURATION ============
-// When hosted by FastAPI, we call the same origin. Fallback for local file:// use.
+const SPACE_URL = "https://GeorgeUwaifo-IvieAI.hf.space";
 
-const SPACE_URL = (location.origin && location.origin !== 'null')
-  ? location.origin
-  : 'http://localhost:8000';
-
-document.getElementById('endpoint').value = SPACE_URL;
 /* ---------- Idle timing configuration ---------- */
 const IDLE_SAD_DELAY_MS     = 90 * 1000;
 const IDLE_TEAR_DELAY_MS    = 90 * 1000;
@@ -756,10 +750,7 @@ const statusEl     = document.getElementById('status');
 const chatLog      = document.getElementById('chatLog');
 const input        = document.getElementById('userInput');
 const sendBtn      = document.getElementById('sendBtn');
-
 const endpoint     = document.getElementById('endpoint');
-endpoint.value = SPACE_URL;   // ensure it's set even if the input is hidden
-
 const connBadge    = document.getElementById('connBadge');
 const leftEye      = document.getElementById('leftEye');
 const rightEye     = document.getElementById('rightEye');
@@ -1802,6 +1793,13 @@ function finishMouthAnimation() { lipSync.finish(); }
 let pendingTrackedMsgEl = null;
 
 /* ---------- SPEECH ---------- */
+const IS_ANDROID = /Android/i.test(navigator.userAgent);
+const IS_IOS = /iPhone|iPad|iPod/i.test(navigator.userAgent) ||
+               (navigator.platform === 'MacIntel' && navigator.maxTouchPoints > 1);   // iPadOS
+const IS_MOBILE = IS_ANDROID || IS_IOS;
+// Android's TTS rejects text over ~4000 characters, so even "one utterance" voices get a safe ceiling.
+const MAX_LOCAL_UTTERANCE_CHARS = 2500;
+
 let speakToken = 0;            // invalidates callbacks from cancelled speech
 let liveUtterances = [];       // keeps references (Chrome GC bug can drop onend events)
 
@@ -1829,7 +1827,7 @@ function speak(text, onEnd) {
   // Local voices read the whole reply as ONE utterance → no gaps between sentences at all.
   // Online voices need splitting (they cut off long speech), so they get large chunks.
   const isLocal = !!(chosenVoice && chosenVoice.localService === true);
-  const chunkTexts = splitIntoChunks(spoken, isLocal ? 1000000 : MAX_CHUNK_CHARS);
+  const chunkTexts = splitIntoChunks(spoken, isLocal ? MAX_LOCAL_UTTERANCE_CHARS : MAX_CHUNK_CHARS);
 
   if (chunkTexts.length === 0) {
     pendingTrackedMsgEl = null;
@@ -1839,6 +1837,7 @@ function speak(text, onEnd) {
     return;
   }
 
+  const hadActiveSpeech = speechSynthesis.speaking || speechSynthesis.pending;
   speechSynthesis.cancel();
   lipSync.begin(chunkTexts, rate, chosenVoice ? chosenVoice.name : 'default', isLocal);
 
@@ -1906,16 +1905,32 @@ function speak(text, onEnd) {
     return u;
   });
 
-  liveUtterances.forEach(u => speechSynthesis.speak(u));
+  const startQueue = () => {
+    if (myToken !== speakToken) return;          // superseded while waiting
+    liveUtterances.forEach(u => speechSynthesis.speak(u));
+  };
+  // Mobile engines (Android/iOS) can swallow a speak() issued right after cancel()
+  if (IS_MOBILE && hadActiveSpeech) setTimeout(startQueue, 120);
+  else startQueue();
 
-  // Online voices in Chrome can stall after ~15s; a periodic nudge keeps them flowing
-  if (chosenVoice && chosenVoice.localService === false) {
+  // Desktop only: online Chrome voices can stall after ~15s; a periodic nudge keeps them flowing.
+  // NEVER on mobile - pause() on Android cancels speech outright.
+  if (!IS_MOBILE && chosenVoice && chosenVoice.localService === false) {
     const keepAlive = setInterval(() => {
       if (done || myToken !== speakToken || !speechSynthesis.speaking) { clearInterval(keepAlive); return; }
       speechSynthesis.pause();
       speechSynthesis.resume();
     }, 10000);
   }
+
+  // Safety net (mobile browsers sometimes never fire onend): if the engine has gone quiet, finish cleanly.
+  let idleChecks = 0;
+  const watchdog = setInterval(() => {
+    if (done || myToken !== speakToken) { clearInterval(watchdog); return; }
+    if (started && !speechSynthesis.speaking && !speechSynthesis.pending) {
+      if (++idleChecks >= 2) { clearInterval(watchdog); lipSync.endChunk(lipSync.curIdx); finishAll(); }
+    } else idleChecks = 0;
+  }, 1000);
 }
 
 /* ---------- Send ---------- */

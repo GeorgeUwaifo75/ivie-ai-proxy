@@ -37,6 +37,14 @@ class Settings:
         ).strip().rstrip("/").lower()
         self.hf_token: str | None = os.getenv("HF_TOKEN") or None
         self.hf_timeout: float = float(os.getenv("HF_TIMEOUT", "120"))
+        # Route on the Space that accepts {"message", "history"} (see Space app.py)
+        self.hf_chat_path: str = os.getenv("HF_CHAT_PATH", "/chat")
+        # How many earlier exchanges are sent to the Space with every request.
+        # (The Space itself keeps at most 20 and puts only the last few into
+        # the model prompt; the rest powers "what was my first question?".)
+        self.hf_history_turns: int = int(os.getenv("HF_HISTORY_TURNS", "20"))
+        # Upper bound on conversations kept in this process's memory.
+        self.max_sessions: int = int(os.getenv("MAX_SESSIONS", "2000"))
 
         # --- OpenAI (only used when LLM_PROVIDER=openai) ---
         self.openai_api_key: str | None = os.getenv("OPENAI_API_KEY")
@@ -59,4 +67,4 @@ class Settings:
 
 @lru_cache
 def get_settings() -> Settings:
-    return Settings()
+    return Settings()

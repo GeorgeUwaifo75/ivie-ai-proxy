@@ -1,16 +1,22 @@
 """LLM abstraction.
 
 Supports:
-  - "echo"   : offline stub — returns a canned but useful reply (default, no API key needed)
-  - "openai" : any OpenAI-compatible endpoint (OpenAI, Azure, Together, Groq, Ollama, etc.)
+  - "huggingface": the IvieAI Space (default)
+  - "openai"     : any OpenAI-compatible endpoint
+  - "echo"       : offline stub
 
-Conversation history is kept in-process per session_id. For production you'd
-swap this for Redis / a DB — but it's fine for a single Render instance.
+Conversation history is kept in-process per session_id (bounded, least-recently-
+used conversations are evicted). For production you'd swap this for Redis / a DB —
+but it's fine for a single Render instance.
+
+Only SUCCESSFUL exchanges are recorded. Error notices ("I'm having trouble
+reaching my backend…") and "still waking up" messages never enter the history,
+so they can't be mistaken for real answers in later follow-ups.
 """
 from __future__ import annotations
 
 import logging
-from collections import defaultdict, deque
+from collections import OrderedDict, deque
 from typing import Deque
 
 from .config import get_settings
@@ -19,15 +25,24 @@ logger = logging.getLogger(__name__)
 settings = get_settings()
 
 # --- In-memory conversation store ------------------------------------------
-_HISTORY: dict[str, Deque[dict]] = defaultdict(lambda: deque(maxlen=settings.max_history_turns * 2))
+# Keep enough for whichever provider needs the most turns; each provider then
+# slices what it sends.
+_MAX_MESSAGES = max(settings.max_history_turns, settings.hf_history_turns) * 2
+_HISTORY: "OrderedDict[str, Deque[dict]]" = OrderedDict()
 
 
 def _record(session_id: str, role: str, content: str) -> None:
-    _HISTORY[session_id].append({"role": role, "content": content})
+    turns = _HISTORY.get(session_id)
+    if turns is None:
+        turns = _HISTORY[session_id] = deque(maxlen=_MAX_MESSAGES)
+    turns.append({"role": role, "content": content})
+    _HISTORY.move_to_end(session_id)
+    while len(_HISTORY) > settings.max_sessions:      # evict least recently used
+        _HISTORY.popitem(last=False)
 
 
 def get_history(session_id: str) -> list[dict]:
-    return list(_HISTORY[session_id])
+    return list(_HISTORY.get(session_id, ()))
 
 
 def clear_history(session_id: str) -> None:
@@ -73,7 +88,7 @@ async def _openai_reply(session_id: str, message: str) -> str:
     )
 
     messages = [{"role": "system", "content": settings.system_prompt}]
-    messages.extend(get_history(session_id))
+    messages.extend(get_history(session_id)[-settings.max_history_turns * 2:])
     messages.append({"role": "user", "content": message})
 
     resp = await client.chat.completions.create(
@@ -85,10 +100,9 @@ async def _openai_reply(session_id: str, message: str) -> str:
     return (resp.choices[0].message.content or "").strip()
 
 
-# --- Public API -------------------------------------------------------------
 # --- HuggingFace provider ---------------------------------------------------
 async def _hf_reply(session_id: str, message: str) -> str:
-    """Forward to the IvieAI Space and return its reply."""
+    """Forward to the IvieAI Space, sending prior turns so it can follow up."""
     from .hf_client import HuggingFaceClient  # local import → optional dependency
 
     client = HuggingFaceClient(
@@ -96,9 +110,9 @@ async def _hf_reply(session_id: str, message: str) -> str:
         token=settings.hf_token,
         timeout=settings.hf_timeout,
     )
-    # Send prior turns so IvieAI keeps context
-    history = get_history(session_id)
-    return await client.chat(message, history)
+    # History is read BEFORE the new message is recorded, so it contains only
+    # earlier turns; the Space receives the new message separately.
+    return await client.chat(message, get_history(session_id))
 
 
 # --- Public API -------------------------------------------------------------
@@ -115,11 +129,12 @@ async def generate_reply(session_id: str, message: str) -> tuple[str, str]:
             reply = _echo_reply(message)
     except Exception as exc:  # noqa: BLE001
         logger.exception("LLM provider '%s' failed: %s", provider, exc)
-        # Optional: fall back to echo so the UI always shows *something*
-        reply = (
+        # Shown to the user but deliberately NOT recorded in the history.
+        reply = getattr(exc, "user_message", None) or (
             f"I'm having trouble reaching my backend right now. "
             f"({type(exc).__name__}: {exc}). Please try again in a moment."
         )
+        return reply, provider
 
     _record(session_id, "user", message)
     _record(session_id, "assistant", reply)

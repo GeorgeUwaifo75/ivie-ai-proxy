@@ -1142,6 +1142,17 @@ function extractReply(data) {
   return JSON.stringify(data);
 }
 
+/* ---------- Conversation session ----------
+   The server keeps the conversation history (what makes follow-up
+   questions work) under this id. Every visitor/tab gets its own, and
+   "New Session" starts a fresh one. */
+function newSessionId() {
+  return (window.crypto && crypto.randomUUID)
+    ? crypto.randomUUID()
+    : 's-' + Date.now().toString(36) + Math.random().toString(36).slice(2, 12);
+}
+let sessionId = newSessionId();
+
 /* ---------- Query model ---------- */
 async function queryModel(message) {
   const base = endpoint.value.trim().replace(/\/+$/, '');
@@ -1149,7 +1160,7 @@ async function queryModel(message) {
   const res = await fetch(`${base}/chat`, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ message })
+    body: JSON.stringify({ message, session_id: sessionId })
   });
   if (!res.ok) throw new Error(`Service error (HTTP ${res.status})`);
   const contentType = res.headers.get('content-type') || '';
@@ -2030,6 +2041,13 @@ document.getElementById('newSessionBtn').addEventListener('click', () => {
   input.value = '';
   sendBtn.disabled = false;
   statusEl.textContent = 'New session started ✨';
+  /* Forget the old conversation on the server and start a fresh one. */
+  {
+    const oldId = sessionId;
+    sessionId = newSessionId();
+    const base = endpoint.value.trim().replace(/\/+$/, '');
+    if (base) fetch(`${base}/reset`, { method: 'POST', headers: { 'X-Session-Id': oldId } }).catch(() => {});
+  }
   setTimeout(() => {
     statusEl.textContent = 'Ready to chat';
     startIdleLoop();
