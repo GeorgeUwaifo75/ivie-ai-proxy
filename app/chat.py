@@ -34,8 +34,8 @@ class ChatManager:
         self.current_session_id: Optional[str] = None
         
         # Model configuration
-        self.MODEL_ID = "GeorgeUwaifo/ivie_gpt2_new01c_results"
-        self.BASE_TOKENIZER = "gpt2"
+        self.MODEL_ID = "GeorgeUwaifo/ivieai_star_v1.12_merged"
+        self.BASE_TOKENIZER = "HuggingFaceTB/SmolLM2-135M"
         self.TOKEN = os.getenv('HF_TOKEN')
         self.MAX_TOKENS_HARD_CAP = 450
         
