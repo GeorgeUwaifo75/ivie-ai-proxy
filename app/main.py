@@ -17,6 +17,7 @@ from fastapi.responses import FileResponse, JSONResponse
 from fastapi.staticfiles import StaticFiles
 
 from .config import get_settings
+from . import llm as llm_module
 from .llm import clear_history, generate_reply
 from .schemas import ChatRequest, ChatResponse, HealthResponse
 
@@ -62,7 +63,8 @@ async def index() -> FileResponse:
     index_file = STATIC_DIR / "index.html"
     if not index_file.exists():
         raise HTTPException(status_code=500, detail="index.html not found")
-    return FileResponse(index_file)
+    # no-cache: browsers must pick up UI updates (a stale page = no memory)
+    return FileResponse(index_file, headers={"Cache-Control": "no-cache"})
 
 
 @app.get("/health", response_model=HealthResponse, tags=["system"])
@@ -96,8 +98,18 @@ async def chat(payload: ChatRequest, request: Request) -> ChatResponse:
     if not message:
         raise HTTPException(status_code=422, detail="message must not be empty")
 
-    logger.info("chat | session=%s | chars=%d", session_id, len(message))
-    reply, provider = await generate_reply(session_id, message)
+    # The page sends its conversation as "history" (role/content messages).
+    # Read it from the raw body so this works whatever fields ChatRequest declares.
+    try:
+        raw = await request.json()
+    except Exception:  # noqa: BLE001
+        raw = {}
+    client_history = raw.get("history") if isinstance(raw, dict) else None
+
+    logger.info("chat | session=%s | chars=%d | client_history=%s",
+                session_id, len(message),
+                len(client_history) if isinstance(client_history, list) else "none")
+    reply, provider = await generate_reply(session_id, message, client_history)
 
     return ChatResponse(
         reply=reply,
@@ -114,6 +126,55 @@ async def reset(request: Request) -> dict:
     )
     clear_history(session_id)
     return {"status": "cleared", "session_id": session_id}
+
+
+@app.get("/diagnose", include_in_schema=False)
+async def diagnose(key: str = "") -> dict:
+    """
+    Memory self-test. Enable by setting DIAGNOSE_KEY on Render, then open
+    /diagnose?key=<that value>. It runs a short conversation through the real
+    Space and reports where (if anywhere) conversation memory breaks.
+    """
+    expected = getattr(settings, "diagnose_key", "")
+    if not expected or key != expected:
+        raise HTTPException(status_code=404, detail="Not found")
+
+    from .hf_client import HuggingFaceClient
+    client = HuggingFaceClient(settings.hf_space_url, settings.hf_token, settings.hf_timeout)
+
+    q1, q2, q3 = "What is the capital of Nigeria?", "What about Ghana?", "What was my last question?"
+    r1 = await client.chat_raw(q1, [], debug=True)
+    h = [{"role": "user", "content": q1}, {"role": "assistant", "content": r1.get("response", "")}]
+    r2 = await client.chat_raw(q2, h, debug=True)
+    h += [{"role": "user", "content": q2}, {"role": "assistant", "content": r2.get("response", "")}]
+    r3 = await client.chat_raw(q3, h, debug=True)
+
+    if "mode" not in r1:
+        verdict = ("Space is running OLD code (no 'mode' in its reply). Deploy the updated "
+                   "app.py to the Space and let it rebuild.")
+    elif r2.get("mode") != "followup":
+        verdict = (f"Space received the history but treated 'What about Ghana?' as "
+                   f"'{r2.get('mode')}'. See debug for what it saw.")
+    elif r3.get("mode") != "recall":
+        verdict = f"Recall question was handled as '{r3.get('mode')}' instead of 'recall'."
+    else:
+        verdict = ("Space memory works. If real chats still have no memory, the problem is in "
+                   "this proxy: see 'proxy' below (several workers? old llm.py? no session_id?).")
+
+    return {
+        "verdict": verdict,
+        "space": {"turn2_mode": r2.get("mode"), "turn2_context_turns":
+                  (r2.get("debug") or {}).get("context_turns_used"),
+                  "turn2_prompt": (r2.get("debug") or {}).get("prompt"),
+                  "turn2_reply": r2.get("response"), "turn3_reply": r3.get("response")},
+        "proxy": {
+            "pid": os.getpid(),                      # changes between calls => several workers
+            "llm_py_is_new_version": hasattr(llm_module, "_MAX_MESSAGES"),
+            "config_is_new_version": hasattr(settings, "hf_history_turns"),
+            "stored_sessions_in_this_process": len(llm_module._HISTORY),
+            "provider": settings.llm_provider,
+        },
+    }
 
 
 # --- Global error handler ---------------------------------------------------

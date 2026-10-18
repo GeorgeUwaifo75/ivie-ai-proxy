@@ -27,7 +27,9 @@ settings = get_settings()
 # --- In-memory conversation store ------------------------------------------
 # Keep enough for whichever provider needs the most turns; each provider then
 # slices what it sends.
-_MAX_MESSAGES = max(settings.max_history_turns, settings.hf_history_turns) * 2
+_HF_TURNS = getattr(settings, "hf_history_turns", 20)
+_MAX_SESSIONS = getattr(settings, "max_sessions", 2000)
+_MAX_MESSAGES = max(settings.max_history_turns, _HF_TURNS) * 2
 _HISTORY: "OrderedDict[str, Deque[dict]]" = OrderedDict()
 
 
@@ -37,7 +39,7 @@ def _record(session_id: str, role: str, content: str) -> None:
         turns = _HISTORY[session_id] = deque(maxlen=_MAX_MESSAGES)
     turns.append({"role": role, "content": content})
     _HISTORY.move_to_end(session_id)
-    while len(_HISTORY) > settings.max_sessions:      # evict least recently used
+    while len(_HISTORY) > _MAX_SESSIONS:      # evict least recently used
         _HISTORY.popitem(last=False)
 
 
@@ -47,6 +49,27 @@ def get_history(session_id: str) -> list[dict]:
 
 def clear_history(session_id: str) -> None:
     _HISTORY.pop(session_id, None)
+
+
+def clean_client_history(raw) -> list[dict]:
+    """
+    Validate history sent by the browser: a list of {"role": "user"|"assistant",
+    "content": str}. Anything else is dropped; size is bounded.
+
+    The page keeps the conversation and sends it with every request, so memory
+    survives server restarts, several workers, or a changed session id. The
+    server-side store below is only the fallback for clients that send none.
+    """
+    if not isinstance(raw, list):
+        return []
+    out: list[dict] = []
+    for item in raw:
+        if not isinstance(item, dict):
+            continue
+        role, content = item.get("role"), item.get("content")
+        if role in ("user", "assistant") and isinstance(content, str) and content.strip():
+            out.append({"role": role, "content": content.strip()[:2000]})
+    return out[-_MAX_MESSAGES:]
 
 
 # --- Echo provider ----------------------------------------------------------
@@ -75,7 +98,7 @@ def _echo_reply(message: str) -> str:
 
 
 # --- OpenAI provider --------------------------------------------------------
-async def _openai_reply(session_id: str, message: str) -> str:
+async def _openai_reply(history: list[dict], message: str) -> str:
     if not settings.openai_api_key:
         raise RuntimeError("OPENAI_API_KEY is not configured.")
 
@@ -88,7 +111,7 @@ async def _openai_reply(session_id: str, message: str) -> str:
     )
 
     messages = [{"role": "system", "content": settings.system_prompt}]
-    messages.extend(get_history(session_id)[-settings.max_history_turns * 2:])
+    messages.extend(history[-settings.max_history_turns * 2:])
     messages.append({"role": "user", "content": message})
 
     resp = await client.chat.completions.create(
@@ -101,7 +124,7 @@ async def _openai_reply(session_id: str, message: str) -> str:
 
 
 # --- HuggingFace provider ---------------------------------------------------
-async def _hf_reply(session_id: str, message: str) -> str:
+async def _hf_reply(session_id: str, history: list[dict], message: str) -> str:
     """Forward to the IvieAI Space, sending prior turns so it can follow up."""
     from .hf_client import HuggingFaceClient  # local import → optional dependency
 
@@ -112,19 +135,26 @@ async def _hf_reply(session_id: str, message: str) -> str:
     )
     # History is read BEFORE the new message is recorded, so it contains only
     # earlier turns; the Space receives the new message separately.
-    return await client.chat(message, get_history(session_id))
+    logger.info("memory | session=%s | prior_msgs=%d | known_sessions=%d",
+                session_id, len(history), len(_HISTORY))
+    return await client.chat(message, history)
 
 
 # --- Public API -------------------------------------------------------------
-async def generate_reply(session_id: str, message: str) -> tuple[str, str]:
-    """Return (reply_text, provider_name_used)."""
+async def generate_reply(session_id: str, message: str,
+                         client_history: list[dict] | None = None) -> tuple[str, str]:
+    """Return (reply_text, provider_name_used).
+
+    client_history (sent by the browser) wins over the server-side store.
+    """
     provider = settings.llm_provider
+    history = clean_client_history(client_history) or get_history(session_id)
 
     try:
         if provider == "huggingface":
-            reply = await _hf_reply(session_id, message)
+            reply = await _hf_reply(session_id, history, message)
         elif provider == "openai":
-            reply = await _openai_reply(session_id, message)
+            reply = await _openai_reply(history, message)
         else:
             reply = _echo_reply(message)
     except Exception as exc:  # noqa: BLE001

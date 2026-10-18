@@ -1153,6 +1153,16 @@ function newSessionId() {
 }
 let sessionId = newSessionId();
 
+/* Successful exchanges only (errors never count). Sent with EVERY request so the
+   conversation does not depend on the server remembering anything. */
+let chatMemory = [];
+function memoryAsMessages() {
+  return chatMemory.slice(-20).flatMap(t => [
+    { role: 'user', content: t.trigger },
+    { role: 'assistant', content: t.reply }
+  ]);
+}
+
 /* ---------- Query model ---------- */
 async function queryModel(message) {
   const base = endpoint.value.trim().replace(/\/+$/, '');
@@ -1160,7 +1170,7 @@ async function queryModel(message) {
   const res = await fetch(`${base}/chat`, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ message, session_id: sessionId })
+    body: JSON.stringify({ message, session_id: sessionId, history: memoryAsMessages() })
   });
   if (!res.ok) throw new Error(`Service error (HTTP ${res.status})`);
   const contentType = res.headers.get('content-type') || '';
@@ -1955,14 +1965,17 @@ async function send() {
   showTypingIndicator();
 
   let reply;
+  let succeeded = false;
   try {
     reply = await queryModel(text);
+    succeeded = true;
   } catch (err) {
     reply = '⚠️ ' + err.message;
   }
   hideTypingIndicator();
 
   conversation.push({ trigger: text, reply: reply });
+  if (succeeded) chatMemory.push({ trigger: text, reply: reply });
 
   const botEl = addMsg('Ivie', reply, 'bot');
   pendingTrackedMsgEl = botEl;
@@ -2037,6 +2050,7 @@ document.getElementById('newSessionBtn').addEventListener('click', () => {
   pendingTrackedMsgEl = null;
   hideTypingIndicator();
   conversation = [];
+  chatMemory = [];
   chatLog.innerHTML = '';
   input.value = '';
   sendBtn.disabled = false;
